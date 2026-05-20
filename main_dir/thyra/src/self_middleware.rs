@@ -1,6 +1,8 @@
-use axum::{extract::Request, middleware::Next, response::Response};
+use axum::{extract::Request, extract::State, middleware::Next, response::Response};
 
-use std::time::Instant;
+use std::{sync::atomic::Ordering, time::Instant};
+
+use crate::AppState;
 
 pub async fn timing_middleware(req: Request, next: Next) -> Response {
     let start = Instant::now();
@@ -8,4 +10,11 @@ pub async fn timing_middleware(req: Request, next: Next) -> Response {
     let duration = start.elapsed();
     println!("Request took {:?}", duration);
     response
+}
+
+pub async fn req_counter(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    state.counter.fetch_add(1, Ordering::Relaxed);
+    let value = state.counter.load(Ordering::Relaxed);
+    println!("Total requests : {}", value);
+    next.run(req).await
 }
