@@ -1,12 +1,10 @@
 use std::convert::Infallible;
-use std::fmt::format;
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode, Uri};
-use hyper_util::client;
+use hyper::{Request, Response, StatusCode, Uri, header::HeaderValue};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -57,7 +55,51 @@ async fn proxy(
         .path_and_query()
         .map(|x| x.as_str())
         .unwrap_or("/");
-    let uri_string = format!("https://127.0.0.1:4000{}", path);
+    // HttpConnector only supports plain HTTP, so the upstream must use http://.
+    let uri_string = format!("http://127.0.0.1:4000{}", path);
 
-    Ok()
+    let uri: Uri = match uri_string.parse() {
+        Ok(u) => u,
+        Err(_) => return Ok(simple_response(StatusCode::BAD_REQUEST, "Invalid URI")),
+    };
+    *req.uri_mut() = uri;
+
+    req.headers_mut().remove("host");
+    req.headers_mut()
+        .insert("x-forwarded-by", HeaderValue::from_static("rust-gateway"));
+
+    //forward reqwest
+    let backend_response = match client.request(req).await {
+        Ok(res) => res,
+        Err(err) => {
+            eprintln!("backend error : {:?}", err);
+            return Ok(simple_response(
+                StatusCode::BAD_GATEWAY,
+                "Backend unavailable",
+            ));
+        }
+    };
+
+    let (parts, body) = backend_response.into_parts();
+    let body = body.boxed();
+
+    //final response
+    let mut builder = Response::builder().status(parts.status);
+    for (key, value) in parts.headers.iter() {
+        builder = builder.header(key, value);
+    }
+    let response = builder.body(body).unwrap();
+
+    Ok(response)
+}
+
+fn simple_response(status: StatusCode, message: &'static str) -> Response<BoxBody> {
+    Response::builder()
+        .status(status)
+        .body(
+            Full::new(Bytes::from(message))
+                .map_err(|never| match never {})
+                .boxed(),
+        )
+        .unwrap()
 }
