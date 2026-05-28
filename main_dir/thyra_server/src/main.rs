@@ -1,6 +1,5 @@
 use axum::middleware;
 use axum::{Router, routing::get};
-use reqwest;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -21,7 +20,6 @@ use crate::self_middleware::req_counter;
 #[derive(Clone)]
 struct AppState {
     counter: Arc<AtomicU64>,
-    client: reqwest::Client,
 }
 
 #[tokio::main]
@@ -35,7 +33,6 @@ async fn main() {
 
     let state = AppState {
         counter: Arc::new(AtomicU64::new(0)),
-        client: reqwest::Client::new(),
     };
 
     let cors = CorsLayer::new().allow_origin(tower_http::cors::Any);

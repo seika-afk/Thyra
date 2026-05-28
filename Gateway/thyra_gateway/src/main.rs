@@ -9,8 +9,24 @@ use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
+use serde::Deserialize;
+use std::fs;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 type BoxBody = http_body_util::combinators::BoxBody<Bytes, hyper::Error>;
+
+static ROOT_BACKEND_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Deserialize, Debug)]
+struct Route {
+    path: String,
+    upstream: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct Config {
+    routes: Vec<Route>,
+}
 
 #[tokio::main]
 async fn main() {
@@ -18,7 +34,7 @@ async fn main() {
         .await
         .unwrap();
     println!("Gateway listening on :3000");
-    println!("Forwarding everything on :4000");
+    println!("Forwarding everything on :4000 - 4002");
 
     //clienty which can take request of type<Connector,Body>-> noral http connection
     let client: Client<HttpConnector, Incoming> =
@@ -49,19 +65,49 @@ async fn proxy(
     mut req: Request<Incoming>,
     client: Client<HttpConnector, Incoming>,
 ) -> Result<Response<BoxBody>, Infallible> {
-    // -> uri to backend
-    let path = req
+    let path = req.uri().path();
+    let query = req
         .uri()
-        .path_and_query()
-        .map(|x| x.as_str())
-        .unwrap_or("/");
-    // HttpConnector only supports plain HTTP, so the upstream must use http://.
-    let uri_string = format!("http://127.0.0.1:4000{}", path);
+        .query()
+        .map(|q| format!("?{q}"))
+        .unwrap_or_default();
+
+    let config = load_config();
+
+    let mut upstream = "http://127.0.0.1:4000".to_string();
+    let mut matched_prefix = "";
+
+    if path == "/" {
+        let backends = [
+            "http://127.0.0.1:8000",
+            "http://127.0.0.1:8001",
+            "http://127.0.0.1:8002",
+        ];
+        let idx = ROOT_BACKEND_INDEX.fetch_add(1, Ordering::Relaxed) % backends.len();
+        upstream = backends[idx].to_string();
+    }
+
+    for route in &config.routes {
+        if path.starts_with(&route.path) && route.path.len() > matched_prefix.len() {
+            upstream = route.upstream.clone();
+            matched_prefix = &route.path;
+        }
+    }
+
+    let remainder = path.strip_prefix(matched_prefix).unwrap_or(path);
+    let uri_string = if remainder.is_empty() {
+        format!("{}{}{}", upstream, matched_prefix, query)
+    } else {
+        format!("{}{}{}{}", upstream, matched_prefix, remainder, query)
+    };
+    //   println!("UGHHHHHHHHHHH{}", path);
+    println!("Request path : {} :::: Redirecting to {}", path, uri_string);
 
     let uri: Uri = match uri_string.parse() {
         Ok(u) => u,
         Err(_) => return Ok(simple_response(StatusCode::BAD_REQUEST, "Invalid URI")),
     };
+
     *req.uri_mut() = uri;
 
     req.headers_mut().remove("host");
@@ -102,4 +148,10 @@ fn simple_response(status: StatusCode, message: &'static str) -> Response<BoxBod
                 .boxed(),
         )
         .unwrap()
+}
+
+fn load_config() -> Config {
+    let content = fs::read_to_string("config.yaml").expect("failed to read config");
+
+    serde_yaml::from_str(&content).expect("invalid yaml")
 }

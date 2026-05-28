@@ -16,3 +16,5 @@ hyper-util = { version = "0.1", features = [
     ]}
 http-body-util = "0.1"
 bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"

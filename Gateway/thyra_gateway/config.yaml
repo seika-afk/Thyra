@@ -1,0 +1,6 @@
+routes:
+  - path: /users
+    upstream: http://127.0.0.1:4001
+
+  - path: /auth
+    upstream: http://127.0.0.1:4002
